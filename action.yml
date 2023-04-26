@@ -12,7 +12,7 @@ runs:
       uses: aliencube/microsoft-teams-actions@7af536b59221419054c51e25db4dd180915acb46
       with:
         title: "New PR: ${{ github.event.pull_request.title }}"
-        summary: "Opened by ${{ github.event.pull_request.user.login }}"
+        summary: "New PR: ${{ github.event.pull_request.title }}"
         text: "Opened by ${{ github.event.pull_request.user.login }}"
         theme_color: "#9900cc"
         actions: '[{ "@type": "OpenUri", "name": "View PR", "targets": [{ "os": "default", "uri": "${{ github.event.pull_request.html_url }}" }]}]'
