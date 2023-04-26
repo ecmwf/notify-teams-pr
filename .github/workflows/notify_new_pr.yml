@@ -1,0 +1,18 @@
+name: Notify new PR
+
+on:
+  pull_request:
+    types:
+      - "opened"
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Notify new PR
+        uses: ./
+        with:
+          incoming_webhook: ${{ secrets.MS_TEAMS_INCOMING_WEBHOOK }}

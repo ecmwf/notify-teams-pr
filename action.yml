@@ -1,0 +1,19 @@
+name: Notify Teams - New Pull Request
+description: |
+  A GitHub Action that notifies of a new Pull Request via Microsoft Teams.
+inputs:
+  incoming_webhook:
+    description: Public URL of the Microsoft Teams incoming webhook.
+    required: true
+runs:
+  using: "composite"
+  steps:
+    - name: Send notification to Teams
+      uses: aliencube/microsoft-teams-actions@7af536b59221419054c51e25db4dd180915acb46
+      with:
+        title: "New PR: ${{ github.event.pull_request.title }}"
+        summary: "Opened by ${{ github.event.pull_request.user.login }}"
+        text: "Opened by ${{ github.event.pull_request.user.login }}"
+        theme_color: "#9900cc"
+        actions: '[{ "@type": "OpenUri", "name": "View PR", "targets": [{ "os": "default", "uri": "${{ github.event.pull_request.html_url }}" }]}]'
+        webhook_uri: ${{ inputs.incoming_webhook }}
