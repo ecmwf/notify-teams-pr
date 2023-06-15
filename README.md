@@ -6,7 +6,7 @@ See `action.yml` for required inputs.
 
 ## Usage
 
-Create a file `.github/workflows/notify_new_pr.yml`
+Create a file `.github/workflows/notify-new-pr.yml`
 
 ```
 name: Notify new PR
