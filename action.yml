@@ -1,19 +1,182 @@
 name: Notify Teams - New Pull Request
 description: |
-  A GitHub Action that notifies of a new Pull Request via Microsoft Teams.
+  A GitHub Action that notifies of a new Pull Request via Microsoft Teams using a webhook URL.
 inputs:
   incoming_webhook:
-    description: Public URL of the Microsoft Teams incoming webhook.
+    description: Microsoft Teams Channel webhook URL (Teams Workflow or Office 365 Connector)
     required: true
+
 runs:
   using: "composite"
   steps:
-    - name: Send notification to Teams
-      uses: aliencube/microsoft-teams-actions@7af536b59221419054c51e25db4dd180915acb46
-      with:
-        title: "New PR: ${{ github.event.pull_request.title }}"
-        summary: "New PR: ${{ github.event.pull_request.title }}"
-        text: "Opened by ${{ github.event.pull_request.user.login }}"
-        theme_color: "#9900cc"
-        actions: '[{ "@type": "OpenUri", "name": "View PR", "targets": [{ "os": "default", "uri": "${{ github.event.pull_request.html_url }}" }]}]'
-        webhook_uri: ${{ inputs.incoming_webhook }}
+    - name: Notify Teams
+      shell: bash
+      env:
+        INCOMING_WEBHOOK: ${{ inputs.incoming_webhook }}
+      run: |
+        set -euo pipefail
+
+        if [[ -z "${INCOMING_WEBHOOK:-}" ]]; then
+          echo "Error: incoming_webhook input is required." >&2
+          exit 1
+        fi
+
+        echo "::add-mask::$INCOMING_WEBHOOK"
+        INCOMING_WEBHOOK="${INCOMING_WEBHOOK//\\/}"
+        echo "::add-mask::$INCOMING_WEBHOOK"
+
+        if [[ ! -f "${GITHUB_EVENT_PATH:-}" ]] || ! jq -e '.pull_request != null' "$GITHUB_EVENT_PATH" >/dev/null; then
+          echo "Error: GITHUB_EVENT_PATH does not contain a pull_request payload." >&2
+          exit 1
+        fi
+
+        is_legacy_webhook() {
+          local url="$1"
+          [[ "$url" == *".webhook.office.com"* ||
+             "$url" == *"office.com/webhook"* ||
+             "$url" == *"office365.com/webhook"* ||
+             "$url" == *"/IncomingWebhook/"* ]]
+        }
+
+        if is_legacy_webhook "$INCOMING_WEBHOOK"; then
+          card_format="message_card"
+          echo "Detected legacy Office 365 Connector webhook (MessageCard)..."
+        else
+          card_format="adaptive_card"
+          echo "Detected Teams Workflow webhook (AdaptiveCard)..."
+        fi
+
+        card_payload=$(jq --arg format "$card_format" '
+          .pull_request as $pr |
+          (if $pr.draft then "New Pull Request: [Draft] \($pr.title)" else "New Pull Request: \($pr.title)" end) as $title |
+          "Opened by \($pr.user.login)" as $author |
+          "\($pr.head.ref) → \($pr.base.ref)" as $branch |
+          (if $pr.changed_files != null then
+            "\($pr.changed_files) files (+\($pr.additions // 0) / -\($pr.deletions // 0)) • \($pr.commits // 0) commits"
+          else null end) as $stats |
+          "View Pull Request" as $action_label |
+
+          if $format == "message_card" then
+            {
+              "@type": "MessageCard",
+              "@context": "http://schema.org/extensions",
+              themeColor: "#9900cc",
+              summary: $title,
+              title: $title,
+              sections: [
+                {
+                  facts: [
+                    { name: "Branch:", value: $branch },
+                    (if $stats != null then { name: "Changes:", value: $stats } else empty end)
+                  ]
+                },
+                {
+                  activityTitle: $author,
+                  activityImage: $pr.user.avatar_url
+                }
+              ],
+              potentialAction: [
+                {
+                  "@type": "OpenUri",
+                  name: $action_label,
+                  targets: [
+                    {
+                      os: "default",
+                      uri: $pr.html_url
+                    }
+                  ]
+                }
+              ]
+            }
+          else
+            {
+              type: "message",
+              attachments: [
+                {
+                  contentType: "application/vnd.microsoft.card.adaptive",
+                  contentUrl: null,
+                  content: {
+                    "$schema": "http://adaptivecards.io/schemas/adaptive-card.json",
+                    type: "AdaptiveCard",
+                    version: "1.4",
+                    body: [
+                      {
+                        type: "TextBlock",
+                        text: $title,
+                        weight: "Bolder",
+                        size: "Medium",
+                        wrap: true
+                      },
+                      {
+                        type: "FactSet",
+                        facts: [
+                          { title: "Branch:", value: $branch },
+                          (if $stats != null then { title: "Changes:", value: $stats } else empty end)
+                        ]
+                      },
+                      {
+                        type: "ColumnSet",
+                        columns: [
+                          {
+                            type: "Column",
+                            width: "auto",
+                            items: [
+                              {
+                                type: "Image",
+                                url: $pr.user.avatar_url,
+                                size: "Small",
+                                style: "Person"
+                              }
+                            ]
+                          },
+                          {
+                            type: "Column",
+                            width: "stretch",
+                            verticalContentAlignment: "Center",
+                            items: [
+                              {
+                                type: "TextBlock",
+                                text: $author,
+                                isSubtle: true,
+                                wrap: true
+                              }
+                            ]
+                          }
+                        ]
+                      }
+                    ],
+                    actions: [
+                      {
+                        type: "Action.OpenUrl",
+                        title: $action_label,
+                        url: $pr.html_url
+                      }
+                    ],
+                    msteams: {
+                      width: "Full"
+                    }
+                  }
+                }
+              ]
+            }
+          end
+        ' "$GITHUB_EVENT_PATH")
+
+        response_file=$(mktemp)
+        trap 'rm -f "$response_file"' EXIT
+
+        echo "Sending notification to Teams..."
+        http_code=$(curl -sS -o "$response_file" -w "%{http_code}" \
+          -X POST \
+          -H "Content-Type: application/json" \
+          -d "$card_payload" \
+          "$INCOMING_WEBHOOK")
+        echo "Response code: $http_code"
+
+        if [[ "$http_code" -ge 200 && "$http_code" -lt 300 ]]; then
+          echo "Notification sent successfully."
+        else
+          echo "Failed to send notification (HTTP $http_code):" >&2
+          cat "$response_file" >&2
+          exit 1
+        fi
